@@ -221,6 +221,7 @@ a{color:var(--violet)}
   .hero h1{font-size:24px}
 }
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+.logo{height:34px;width:auto;max-width:150px;display:block}
 </style>
 
 </head>
@@ -351,7 +352,7 @@ a{color:var(--violet)}
     if (state.roles.leader) tabs.push(['leader', 'Leader']);
     if (state.roles.admin) tabs.push(['dash', 'Dashboard']);
     $('#app').innerHTML =
-      '<header class="top"><div class="brand"><span class="mark" aria-hidden="true"></span><div><div class="org">' + esc(B.org) +
+      '<header class="top"><div class="brand"><img class="logo" src="logo.png" alt="' + esc(B.org) + '" onerror="this.outerHTML=\'<span class=&quot;mark&quot; aria-hidden=&quot;true&quot;></span>\'"><div><div class="org">' + esc(B.org) +
       '</div><div class="appname">Aura Tasks</div></div></div>' +
       '<div class="who"><div class="nm">' + esc(state.me.name) + '</div><div class="id">' + esc(state.me.id) +
       '</div><button class="refresh" data-refresh="1">Refresh</button></div></header>' +
