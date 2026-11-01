@@ -485,7 +485,7 @@ a{color:var(--violet)}
     var ids = scopeIds(), me = state.me.id;
     var scoped = L.tasks.filter(function (t) { return ids.indexOf(t.unitId) >= 0 || (t.reviewerId === me && !t.canManage); });
     var open = scoped.filter(isOpen);
-    var review = scoped.filter(function (t) { return t.stage === 'Review' && (t.canManage || t.reviewerId === me); });
+    var review = scoped.filter(function (t) { return t.stage === 'Review' && !t.isMine && (t.canManage || t.reviewerId === me); });
     var alerts = [];
     open.forEach(function (t) {
       var h = t.created ? (Date.now() - new Date(t.created)) / 36e5 : 0;
@@ -875,4 +875,3 @@ a{color:var(--violet)}
 
 </body>
 </html>
-<!-- Uploaded -->
