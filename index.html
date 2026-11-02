@@ -328,7 +328,25 @@ a{color:var(--violet)}
   function replaceTask(t) {
     function rep(list) { if (!list) return; for (var i = 0; i < list.length; i++) if (list[i].id === t.id) { t.kids = list[i].kids; t.canManage = list[i].canManage; list[i] = t; } }
     rep(state.tasks); if (state.leader) rep(state.leader.tasks); if (state.dash) rep(state.dash.list);
-    if (t.isMine && !state.tasks.some(function (x) { return x.id === t.id; })) state.tasks.push(t);
+    if ((t.isMine || t.isCollab || t.canReview || t.canPublish) && !state.tasks.some(function (x) { return x.id === t.id; })) state.tasks.push(t);
+  }
+  function mineOrHelping(t) { return t.isMine || t.isCollab; }
+  function stepText(t) { return t.approvalTotal > 1 ? (t.approvalStep ? 'Approval ' + (t.approvalStep + 1) + ' of ' + t.approvalTotal : 'QA, step 1 of ' + t.approvalTotal) : ''; }
+  function extraMeta(t) {
+    var b = [];
+    if (t.taskType) b.push('<span class="pri">' + esc(t.taskType) + '</span>');
+    if (t.eventDate) b.push('<span>Event ' + esc(fmtDate(t.eventDate)) + '</span>');
+    if (t.collaborators && t.collaborators.length) b.push('<span>With ' + esc(t.collaborators.map(function (c) { return c.name; }).join(', ')) + '</span>');
+    if (t.flags && t.flags.indexOf('short') >= 0) b.push('<span class="due soon">Short notice</span>');
+    if (t.qaRounds > 1) b.push('<span class="due late">QA round ' + t.qaRounds + '</span>');
+    return b.join('');
+  }
+  function links(t) {
+    var l = [];
+    if (t.workFolder) l.push('<a href="' + esc(t.workFolder) + '" target="_blank" rel="noopener">Work folder</a>');
+    if (t.proof && t.proof !== t.workFolder) l.push('<a href="' + esc(t.proof) + '" target="_blank" rel="noopener">Proof</a>');
+    if (t.publishLink) l.push('<a href="' + esc(t.publishLink) + '" target="_blank" rel="noopener">Live post</a>');
+    return l.length ? '<div class="note" style="background:var(--mist)">' + l.join(' · ') + '</div>' : '';
   }
   function busy(btn, on) { if (!btn) return; btn.disabled = on; btn.classList.toggle('busy', on); }
 
@@ -379,8 +397,9 @@ a{color:var(--violet)}
 
   /* ---------- My tasks ---------- */
   function renderMine() {
-    var open = state.tasks.filter(isOpen).sort(byUrgency);
-    var done = state.tasks.filter(function (t) { return !isOpen(t); }).sort(function (a, b) { return new Date(b.doneAt || b.lastUpdate) - new Date(a.doneAt || a.lastUpdate); });
+    var todo = state.tasks.filter(function (t) { return t.canReview || t.canPublish || t.canArchive; }).sort(byUrgency);
+    var open = state.tasks.filter(function (t) { return mineOrHelping(t) && isOpen(t); }).sort(byUrgency);
+    var done = state.tasks.filter(function (t) { return mineOrHelping(t) && !isOpen(t); }).sort(function (a, b) { return new Date(b.doneAt || b.lastUpdate) - new Date(a.doneAt || a.lastUpdate); });
     var toAccept = open.filter(function (t) { return t.stage === 'Not started'; }).length;
     var late = open.filter(function (t) { return t.overdue; }).length;
     var head;
@@ -397,6 +416,10 @@ a{color:var(--violet)}
       '<div class="filters" role="group" aria-label="Filter">' +
       '<button class="fchip' + (state.mineFilter === 'open' ? ' on' : '') + '" data-mf="open">Active<span class="n">' + open.length + '</span></button>' +
       '<button class="fchip' + (state.mineFilter === 'done' ? ' on' : '') + '" data-mf="done">Done<span class="n">' + done.length + '</span></button></div>';
+    if (state.mineFilter === 'open' && todo.length) {
+      html += '<div class="sec"><h2>Waiting for you</h2><span class="sub">' + todo.length + '</span></div>' + todo.map(reviewCard).join('') +
+        '<div class="sec"><h2>Your tasks</h2></div>';
+    }
     if (!list.length) {
       html += state.mineFilter === 'open'
         ? '<div class="empty panel"><h3>All clear</h3><p>You have no open tasks right now.</p></div>'
@@ -411,8 +434,9 @@ a{color:var(--violet)}
       '<div class="card-top"><span class="unit">' + esc(t.unitName) + '</span><span class="chip ' + stageCls(t.stage) + '">' + esc(t.status) + '</span></div>' +
       '<h3 class="title">' + esc(t.title) + '</h3>' +
       '<div class="meta"><span class="due ' + d.cls + '">' + esc(d.text) + '</span><span>From ' + esc(t.assignedByName) + '</span>' +
-      (t.priority !== 'Normal' ? '<span class="pri p-' + esc(t.priority.toLowerCase()) + '">' + esc(t.priority) + '</span>' : '') + '</div>' +
-      bar(t.progress, t.stage) +
+      (t.priority !== 'Normal' ? '<span class="pri p-' + esc(t.priority.toLowerCase()) + '">' + esc(t.priority) + '</span>' : '') +
+      (t.isCollab && !t.isMine ? '<span>Helping ' + esc(t.ownerName) + '</span>' : '') + extraMeta(t) + '</div>' +
+      bar(t.progress, t.stage) + links(t) +
       (t.returnReason && t.stage === 'Active' ? '<div class="note warn"><b>Sent back:</b> ' + esc(t.returnReason) + '</div>' : '') +
       (t.stage === 'Blocked' ? '<div class="note bad"><b>Blocked:</b> ' + esc(t.blockReason) + '</div>' : '') +
       (t.details ? '<details class="det"><summary>Details</summary><p>' + esc(t.details) + '</p></details>' : '') +
@@ -421,6 +445,12 @@ a{color:var(--violet)}
 
   function mineActions(t) {
     var id = esc(t.id);
+    if (t.isCollab && !t.isMine) {
+      if (t.stage === 'Active') return '<div class="prog-row" role="group" aria-label="How much is done">' + [25, 50, 75, 90].map(function (p) {
+          return '<button class="pbtn' + (t.progress >= p ? ' on' : '') + '" data-a="progress" data-p="' + p + '" data-id="' + id + '">' + p + '%</button>';
+        }).join('') + '</div><span class="hint">You are helping. ' + esc(t.ownerName) + ' submits the work.</span>';
+      if (t.stage === 'Not started') return '<span class="hint">Waiting for ' + esc(t.ownerName) + ' to accept.</span>';
+    }
     if (t.stage === 'Not started') return '<div class="btn-row"><button class="btn primary" data-a="accept" data-id="' + id + '">Accept</button>' +
       '<span class="hint">Accepting tells your leader the task has reached you</span></div>';
     if (t.stage === 'Active') return '<div class="prog-row" role="group" aria-label="How much is done">' + [25, 50, 75, 90].map(function (p) {
@@ -428,9 +458,23 @@ a{color:var(--violet)}
       }).join('') + '</div><div class="btn-row"><button class="btn primary" data-a="submit" data-id="' + id + '">Submit work</button>' +
       '<button class="btn ghost" data-a="block" data-id="' + id + '">I\'m blocked</button></div>';
     if (t.stage === 'Blocked') return '<div class="btn-row"><button class="btn" data-a="resume" data-id="' + id + '">Resume work</button></div>';
-    if (t.stage === 'Review') return '<span class="hint">Waiting for review by ' + esc(t.reviewerName) + (t.proof ? ', <a href="' + esc(t.proof) + '" target="_blank" rel="noopener">view proof</a>' : '') + '</span>';
+    if (t.stage === 'Review') return '<span class="hint">' + (stepText(t) ? esc(stepText(t)) + ', w' : 'W') + 'aiting for review by ' + esc(t.reviewerName) + (t.proof ? ', <a href="' + esc(t.proof) + '" target="_blank" rel="noopener">view proof</a>' : '') + '</span>';
     if (t.stage === 'Done') return '<span class="hint ok">Done' + (t.osSynced ? ', sent to Aura OS as a contribution (pending HR approval)' : '') + '</span>';
     return '<span class="hint">' + esc(t.status) + '</span>';
+  }
+
+  function reviewCard(t) {
+    var id = esc(t.id), btns = '';
+    if (t.canReview) btns = '<button class="btn primary" data-l="approve" data-id="' + id + '">' + (t.qaChecks && t.qaChecks.length ? 'Run QA' : 'Approve') + '</button>' +
+      '<button class="btn" data-l="return" data-id="' + id + '">Send back</button>';
+    else if (t.canPublish) btns = '<button class="btn primary" data-l="publish" data-id="' + id + '">Mark published</button>';
+    else if (t.canArchive) btns = '<button class="btn" data-l="archive" data-id="' + id + '">Archive now</button>';
+    return '<article class="card" id="t-' + id + '"><div class="card-top"><span class="unit">' + esc(t.unitName) + '</span><span class="chip ' + stageCls(t.stage) + '">' + esc(t.status) + '</span></div>' +
+      '<h3 class="title">' + esc(t.title) + '</h3><div class="meta"><span>' + esc(t.ownerName) + '</span>' +
+      (t.submittedAt && t.stage === 'Review' ? '<span>Submitted ' + esc(fmtDT(t.submittedAt)) + '</span>' : '') +
+      (stepText(t) && t.stage === 'Review' ? '<span>' + esc(stepText(t)) + '</span>' : '') +
+      (t.hours ? '<span>' + esc(t.hours) + ' hours</span>' : '') + extraMeta(t) + '</div>' + links(t) +
+      '<div class="actions"><div class="btn-row">' + btns + '</div></div></article>';
   }
 
   function act(btn, id, action, payload, msg) {
@@ -486,7 +530,8 @@ a{color:var(--violet)}
     var ids = scopeIds(), me = state.me.id;
     var scoped = L.tasks.filter(function (t) { return ids.indexOf(t.unitId) >= 0 || (t.reviewerId === me && !t.canManage); });
     var open = scoped.filter(isOpen);
-    var review = scoped.filter(function (t) { return t.stage === 'Review' && !t.isMine && (t.canManage || t.reviewerId === me); });
+    var review = scoped.filter(function (t) { return t.stage === 'Review' && t.canReview; });
+    var toPublish = scoped.filter(function (t) { return t.canPublish; });
     var alerts = [];
     open.forEach(function (t) {
       var h = t.created ? (Date.now() - new Date(t.created)) / 36e5 : 0;
@@ -516,14 +561,10 @@ a{color:var(--violet)}
       stat('In review', review.length) + stat('Blocked', open.filter(function (t) { return t.stage === 'Blocked'; }).length, 'bad') + '</div>';
 
     if (review.length) {
-      html += '<div class="sec"><h2>Waiting for review</h2><span class="sub">' + review.length + '</span></div>' + review.sort(byUrgency).map(function (t) {
-        return '<article class="card"><div class="card-top"><span class="unit">' + esc(t.unitName) + '</span><span class="chip s-review">' + esc(t.status) + '</span></div>' +
-          '<h3 class="title">' + esc(t.title) + '</h3><div class="meta"><span>' + esc(t.ownerName) + '</span><span>Submitted ' + esc(fmtDT(t.submittedAt)) + '</span>' +
-          (t.hours ? '<span>' + esc(t.hours) + ' hours</span>' : '') + '</div>' +
-          (t.proof ? '<div class="note" style="background:var(--mist)"><a href="' + esc(t.proof) + '" target="_blank" rel="noopener">View proof</a></div>' : '') +
-          '<div class="actions"><div class="btn-row"><button class="btn primary" data-l="approve" data-id="' + esc(t.id) + '">Approve</button>' +
-          '<button class="btn" data-l="return" data-id="' + esc(t.id) + '">Send back</button></div></div></article>';
-      }).join('');
+      html += '<div class="sec"><h2>Waiting for review</h2><span class="sub">' + review.length + '</span></div>' + review.sort(byUrgency).map(reviewCard).join('');
+    }
+    if (toPublish.length) {
+      html += '<div class="sec"><h2>Approved, not published yet</h2><span class="sub">' + toPublish.length + '</span></div>' + toPublish.map(reviewCard).join('');
     }
 
     html += '<div class="sec"><h2>Needs attention</h2><span class="sub">' + (alerts.length ? alerts.length : '') + '</span></div>';
@@ -556,7 +597,8 @@ a{color:var(--violet)}
     var m = '<div class="manage">' +
       (t.details ? '<p style="white-space:pre-wrap;margin:10px 0 0;font-size:14px;color:var(--ink2)">' + esc(t.details) + '</p>' : '') +
       '<p class="hint" style="margin:8px 0 0">' + esc(t.id) + ', assigned by ' + esc(t.assignedByName) + ', reviewer ' + esc(t.reviewerName) +
-      (t.proof ? ', <a href="' + esc(t.proof) + '" target="_blank" rel="noopener">proof</a>' : '') + '</p>' +
+      (stepText(t) && t.stage === 'Review' ? ' (' + esc(stepText(t)) + ')' : '') + '</p>' +
+      (extraMeta(t) ? '<div class="meta" style="margin-top:6px">' + extraMeta(t) + '</div>' : '') + links(t) +
       (t.blockReason && t.stage === 'Blocked' ? '<div class="note bad"><b>Blocked:</b> ' + esc(t.blockReason) + '</div>' : '') +
       (t.returnReason && t.stage === 'Active' ? '<div class="note warn"><b>Sent back:</b> ' + esc(t.returnReason) + '</div>' : '') + '<div class="btn-row">';
     if (t.canManage && isOpen(t)) {
@@ -564,6 +606,7 @@ a{color:var(--violet)}
         '<button class="btn sm" data-l="status" data-id="' + id + '">Change status</button>' +
         '<button class="btn sm" data-l="extend" data-id="' + id + '">Change deadline</button>' +
         '<button class="btn sm" data-l="reassign" data-id="' + id + '">Reassign</button>' +
+        '<button class="btn sm" data-l="people" data-id="' + id + '">Reviewer and helpers</button>' +
         '<button class="btn sm" data-l="edit" data-id="' + id + '">Edit</button>' +
         (t.stage === 'Blocked' ? '<button class="btn sm" data-l="resume" data-id="' + id + '">Resume</button>' : '') +
         '<button class="btn sm danger" data-l="cancel" data-id="' + id + '">Cancel task</button>';
@@ -571,16 +614,33 @@ a{color:var(--violet)}
       m += '<button class="btn sm" data-l="status" data-id="' + id + '">Change status</button>';
     }
     if (t.isMine && isOpen(t) && !t.canManage) m += '<button class="btn sm" data-l="sub" data-id="' + id + '">Split across team</button>';
+    if (t.canPublish) m += '<button class="btn sm" data-l="publish" data-id="' + id + '">Mark published</button>';
+    if (t.canArchive) m += '<button class="btn sm" data-l="archive" data-id="' + id + '">Archive now</button>';
     m += '<button class="btn sm ghost" data-l="history" data-id="' + id + '">History</button>' +
       (w ? '<a class="btn sm wa" href="' + esc(w) + '" target="_blank" rel="noopener">WhatsApp</a>' : '') + '</div></div>';
     return row + m;
   }
 
-  function findLT(id) { return (state.leader.tasks.filter(function (t) { return t.id === id; })[0]) || (state.tasks.filter(function (t) { return t.id === id; })[0]); }
+  function findLT(id) { return (state.leader && state.leader.tasks.filter(function (t) { return t.id === id; })[0]) || (state.tasks.filter(function (t) { return t.id === id; })[0]); }
   function treeOf(unitId) {
     var L = state.leader, out = [unitId], changed = true;
     while (changed) { changed = false; L.units.forEach(function (u) { if (out.indexOf(u.parent) >= 0 && out.indexOf(u.id) < 0) { out.push(u.id); changed = true; } }); }
     return out;
+  }
+  function rootOf(unitId) {
+    var L = state.leader, cur = unitId, guard = 0;
+    while (guard++ < 10) {
+      var u = L.units.filter(function (x) { return x.id === cur; })[0];
+      if (!u || !u.parent || !L.units.some(function (x) { return x.id === u.parent; })) return cur;
+      cur = u.parent;
+    }
+    return cur;
+  }
+  function picked(sel) { return sel ? Array.prototype.filter.call(sel.options, function (o) { return o.selected; }).map(function (o) { return o.value; }) : []; }
+  function typeOf(set, name) { return ((state.leader.types || {})[set] || []).filter(function (x) { return x.type === name; })[0]; }
+  function showEv(f, uid) {
+    var u = state.leader.units.filter(function (x) { return x.id === uid; })[0], ty = u && $('#f-type', f) ? typeOf(u.statusSet, $('#f-type', f).value) : null;
+    if ($('#f-evwrap', f)) $('#f-evwrap', f).style.display = ty && ty.template ? '' : 'none';
   }
   function memberOptions(unitId, exclude) {
     var L = state.leader, tree = treeOf(unitId), seen = {}, opts = [];
@@ -601,6 +661,12 @@ a{color:var(--violet)}
       return '<option value="">None</option>' + L.tasks.filter(function (t) { return isOpen(t) && (tree.indexOf(t.unitId) >= 0 || t.isMine); })
         .map(function (t) { return '<option value="' + esc(t.id) + '"' + (preset.parentId === t.id ? ' selected' : '') + '>' + esc(t.id + ' ' + t.title) + '</option>'; }).join('');
     }
+    function typeOpts(uid) {
+      var u = L.units.filter(function (x) { return x.id === uid; })[0], list = (u && L.types && L.types[u.statusSet]) || [];
+      return '<option value="">No type (simple task)</option>' + list.map(function (x) {
+        return '<option value="' + esc(x.type) + '">' + esc(x.type) + (x.noticeDays ? ' (' + x.noticeDays + ' days notice)' : '') + '</option>';
+      }).join('');
+    }
     function ownerOpts(uid) {
       return (L.admin ? '<option value="__UNIT__">The unit\'s intake or leader (send to the wing)</option>' : '') +
         '<option value="" disabled selected>Choose a member</option>' + memberOptions(uid, '');
@@ -610,19 +676,31 @@ a{color:var(--violet)}
       body: (preset.parentTitle ? '<div class="ctx">Part of: ' + esc(preset.parentTitle) + '</div>' : '') +
         field('unitId', 'Unit', '<select name="unitId" id="f-unit">' + units + '</select>') +
         field('ownerId', 'Assign to', '<select name="ownerId" id="f-owner">' + ownerOpts(unitId) + '</select>', 'One owner per task. Split bigger work into subtasks later.') +
+        field('collab', 'Helpers (optional)', '<select id="f-collab" multiple size="4" style="min-height:96px">' + memberOptions(rootOf(unitId), '') + '</select>',
+          'People who work on it with the owner. Hold Ctrl or Cmd to pick several. They can update progress but cannot review it.') +
+        (preset.parentId ? '' : field('taskType', 'Type', '<select name="taskType" id="f-type">' + typeOpts(unitId) + '</select>', 'Sets the notice period, approvals and Drive folder.')) +
+        (preset.parentId ? '' : '<div id="f-evwrap" style="display:none">' + field('eventDate', 'Event date', '<input name="eventDate" type="date" min="' + todayStr() + '">',
+          'Coverage subtasks are timed from this date.') + '</div>') +
         field('title', 'Task', '<input name="title" maxlength="200" placeholder="e.g. NexImpact poster final design" required>') +
         field('details', 'Details (optional)', '<textarea name="details" placeholder="What\'s needed, where to submit it, reference links"></textarea>') +
         '<div class="grid2">' + field('deadline', 'Deadline', '<input name="deadline" type="date" min="' + todayStr() + '" required>') +
         field('priority', 'Priority', '<select name="priority">' + L.priorities.map(function (p) { return '<option' + (p === 'Normal' ? ' selected' : '') + '>' + p + '</option>'; }).join('') + '</select>') + '</div>' +
         field('parentId', 'Part of a larger task (optional)', '<select name="parentId" id="f-parent">' + parentOpts(unitId) + '</select>'),
       onMount: function (f) {
-        $('#f-unit', f).addEventListener('change', function (e) { $('#f-owner', f).innerHTML = ownerOpts(e.target.value); $('#f-parent', f).innerHTML = parentOpts(e.target.value); });
+        $('#f-unit', f).addEventListener('change', function (e) {
+          $('#f-owner', f).innerHTML = ownerOpts(e.target.value); $('#f-parent', f).innerHTML = parentOpts(e.target.value);
+          $('#f-collab', f).innerHTML = memberOptions(rootOf(e.target.value), '');
+          if ($('#f-type', f)) { $('#f-type', f).innerHTML = typeOpts(e.target.value); showEv(f, e.target.value); }
+        });
+        if ($('#f-type', f)) $('#f-type', f).addEventListener('change', function () { showEv(f, $('#f-unit', f).value); });
       },
       onSubmit: function (v) {
         if (!v.ownerId) throw new Error('Choose who to assign this to.');
         if ((v.title || '').trim().length < 3) throw new Error('Describe the task.');
         if (!v.deadline) throw new Error('Set a deadline.');
-        var p = { unitId: v.unitId, title: v.title, details: v.details, deadline: v.deadline, priority: v.priority, parentId: v.parentId };
+        var p = { unitId: v.unitId, title: v.title, details: v.details, deadline: v.deadline, priority: v.priority, parentId: v.parentId,
+                  taskType: v.taskType || '', eventDate: v.eventDate || '', collaborators: picked($('#f-collab')) };
+        if (p.collaborators.indexOf(v.ownerId) >= 0) throw new Error('The owner cannot also be a helper.');
         if (v.ownerId === '__UNIT__') p.toUnit = true; else p.ownerId = v.ownerId;
         return call('apiCreate', p).then(function (t) {
           t.canManage = true; state.leader.tasks.push(t); if (t.isMine) state.tasks.push(t);
@@ -641,12 +719,32 @@ a{color:var(--violet)}
         field('unitId', 'Wing or team', '<select name="unitId"><option value="" disabled selected>Choose one</option>' + L.requestUnits.map(function (u) { return '<option value="' + esc(u.id) + '">' + esc(u.name) + '</option>'; }).join('') + '</select>') +
         field('title', 'What you need', '<input name="title" maxlength="200" placeholder="e.g. Poster for CA recruitment" required>') +
         field('details', 'Details', '<textarea name="details" placeholder="Size, text, references, where it will be used"></textarea>') +
-        field('deadline', 'Needed by', '<input name="deadline" type="date" min="' + todayStr() + '" required>'),
+        field('deadline', 'Needed by', '<input name="deadline" type="date" min="' + todayStr() + '" required>') +
+        '<div id="r-typewrap" style="display:none">' + field('taskType', 'Type', '<select name="taskType" id="r-type"></select>', 'Each type has its own notice period.') + '</div>' +
+        '<div id="r-evwrap" style="display:none">' + field('eventDate', 'Event date', '<input name="eventDate" type="date" min="' + todayStr() + '">') + '</div>',
+      onMount: function (f) {
+        var unitSel = $('select[name="unitId"]', f);
+        function setFor() {
+          var u = L.requestUnits.filter(function (x) { return x.id === unitSel.value; })[0], list = (u && L.types && L.types[u.statusSet]) || [];
+          $('#r-typewrap', f).style.display = list.length ? '' : 'none';
+          $('#r-type', f).innerHTML = '<option value="">Not sure / other</option>' + list.map(function (x) {
+            return '<option value="' + esc(x.type) + '">' + esc(x.type) + (x.noticeDays ? ' (' + x.noticeDays + ' days notice)' : '') + '</option>';
+          }).join('');
+          evFor();
+        }
+        function evFor() {
+          var u = L.requestUnits.filter(function (x) { return x.id === unitSel.value; })[0], ty = u ? typeOf(u.statusSet, $('#r-type', f).value) : null;
+          $('#r-evwrap', f).style.display = ty && ty.template ? '' : 'none';
+        }
+        unitSel.addEventListener('change', setFor);
+        $('#r-type', f).addEventListener('change', evFor);
+      },
       onSubmit: function (v) {
         if (!v.unitId) throw new Error('Choose a wing or team.');
         if ((v.title || '').trim().length < 3) throw new Error('Say what you need.');
         if (!v.deadline) throw new Error('Set the date you need it by.');
-        return call('apiCreate', { unitId: v.unitId, title: v.title, details: v.details, deadline: v.deadline, source: 'Request' }).then(function (t) {
+        return call('apiCreate', { unitId: v.unitId, title: v.title, details: v.details, deadline: v.deadline, source: 'Request',
+                                   taskType: v.taskType || '', eventDate: v.eventDate || '' }).then(function (t) {
           toast('Request sent (' + t.id + ').'); loadLeader(true);
         });
       }
@@ -658,10 +756,38 @@ a{color:var(--violet)}
     if (a === 'new') return openNewTask();
     if (a === 'request') return openRequest();
     if (!t) return;
-    if (a === 'approve') return act(btn, id, 'approve', {}, 'Approved and sent to Aura OS as a contribution.').catch(function () {});
+    if (a === 'approve') return openApprove(t, btn);
+    if (a === 'publish') return modal({
+      title: 'Mark as published', submit: 'Save',
+      body: '<div class="ctx">' + esc(t.title) + '</div>' +
+        field('link', 'Link to the live post' + (t.needsPublishLink ? '' : ' (optional)'), '<input name="link" type="url" inputmode="url" placeholder="https://facebook.com/...">',
+          'Files are archived automatically a while after publishing.'),
+      onSubmit: function (v) {
+        if (t.needsPublishLink && !v.link) throw new Error('Add the link to the live post.');
+        if (v.link && !/^https?:\/\/\S+$/i.test(v.link)) throw new Error('The link must start with https.');
+        return call('apiAct', 'publish', t.id, v).then(done('Marked as published.'));
+      }
+    });
+    if (a === 'archive') return act(btn, id, 'archive', {}, 'Archived.').catch(function () {});
+    if (a === 'people') {
+      var root = rootOf(t.unitId), cur = (t.collaborators || []).map(function (c) { return c.id; });
+      return modal({
+        title: 'Reviewer and helpers', submit: 'Save',
+        body: '<div class="ctx">' + esc(t.title) + '<br>Owner: ' + esc(t.ownerName) + '</div>' +
+          field('reviewerId', 'Reviewer (QA)', '<select name="reviewerId"><option value="">Keep ' + esc(t.reviewerName) + '</option>' + memberOptions(root, t.ownerId) + '</select>',
+            'Someone who did not work on it. For PR, usually the Social Media & QA member on duty.') +
+          field('collab', 'Helpers', '<select id="p-collab" multiple size="5" style="min-height:110px">' + memberOptions(root, t.ownerId) + '</select>', 'Hold Ctrl or Cmd to pick several.'),
+        onMount: function (f) { Array.prototype.forEach.call($('#p-collab', f).options, function (o) { o.selected = cur.indexOf(o.value) >= 0; }); },
+        onSubmit: function (v) {
+          var c = picked($('#p-collab'));
+          if (v.reviewerId && c.indexOf(v.reviewerId) >= 0) throw new Error('The reviewer cannot also be a helper.');
+          return call('apiAct', 'people', t.id, { reviewerId: v.reviewerId || '', collaborators: c }).then(done('Saved.'));
+        }
+      });
+    }
     if (a === 'resume') return act(btn, id, 'resume', {}, 'Back in progress.').catch(function () {});
     if (a === 'sub') return openNewTask({ unitId: state.leader.units.some(function (u) { return u.id === t.unitId; }) ? t.unitId : state.leader.units[0].id, parentId: t.id, parentTitle: t.title });
-    if (a === 'return') return simpleForm(t, 'Send back', 'Send back', 'reason', 'What needs to change', '<textarea name="reason" placeholder="e.g. Make the logo bigger, and the date is wrong" required></textarea>', 'return', 'Sent back to the member.', 5);
+    if (a === 'return') return openReturn(t);
     if (a === 'cancel') return simpleForm(t, 'Cancel task', 'Cancel task', 'reason', 'Why cancel it', '<textarea name="reason" required></textarea>', 'cancel', 'Task cancelled.', 3);
     if (a === 'extend') return modal({
       title: 'Change deadline', submit: 'Save',
@@ -706,10 +832,42 @@ a{color:var(--violet)}
       }).catch(function (e) { var el = $('#hist'); if (el) el.innerHTML = '<p class="form-err">' + esc(e.message) + '</p>'; });
     }
   }
+  function qaFields(t, preset) {
+    return (t.qaChecks || []).map(function (c, i) {
+      return field('qa' + i, esc(c.name), '<select name="qa' + i + '"><option value=""' + (preset ? '' : ' selected') + '>Choose</option><option value="pass"' + (preset === 'pass' ? ' selected' : '') + '>Pass</option><option value="fail">Fail</option></select>', esc(c.help));
+    }).join('');
+  }
+  function qaPayload(t, v) { var q = {}; (t.qaChecks || []).forEach(function (c, i) { q[c.name] = v['qa' + i] || ''; }); return q; }
+  function openApprove(t, btn) {
+    var hasQa = t.qaChecks && t.qaChecks.length;
+    if (!hasQa) return act(btn, t.id, 'approve', {}, t.approvalTotal > 1 && t.approvalStep + 1 < t.approvalTotal ? 'Approved. Sent to the next approver.' : 'Approved and sent to Aura OS as a contribution.').catch(function () {});
+    modal({
+      title: 'QA check', submit: 'Approve',
+      body: '<div class="ctx">' + esc(t.title) + '<br>' + esc(t.ownerName) + (stepText(t) ? ', ' + esc(stepText(t)) : '') + '</div>' + links(t) + qaFields(t, '') +
+        field('note', 'Note (optional)', '<input name="note">'),
+      onSubmit: function (v) {
+        var q = qaPayload(t, v), bad = Object.keys(q).filter(function (k) { return q[k] !== 'pass'; });
+        if (bad.length) throw new Error('Every check must pass to approve. Use Send back if something failed: ' + bad.join(', '));
+        return call('apiAct', 'approve', t.id, { qa: q, note: v.note }).then(done(t.approvalTotal > 1 ? 'QA passed. Sent to the next approver.' : 'Approved.'));
+      }
+    });
+  }
+  function openReturn(t) {
+    modal({
+      title: 'Send back', submit: 'Send back',
+      body: '<div class="ctx">' + esc(t.title) + '<br>' + esc(t.ownerName) + '</div>' + qaFields(t, '') +
+        field('reason', 'What needs to change', '<textarea name="reason" placeholder="e.g. Make the logo bigger, and the date is wrong" required></textarea>'),
+      onSubmit: function (v) {
+        if ((v.reason || '').trim().length < 5) throw new Error('Please add a little more detail.');
+        return call('apiAct', 'return', t.id, { reason: v.reason, qa: qaPayload(t, v) }).then(done('Sent back to the member.'));
+      }
+    });
+  }
   function actionText(a) {
     return { CREATED: 'assigned the task', REQUESTED: 'sent a request', ACCEPTED: 'accepted', PROGRESS: 'updated progress', SUBMITTED: 'submitted',
       APPROVED: 'approved', RETURNED: 'sent it back', BLOCKED: 'marked it blocked', RESUMED: 'resumed it', STATUS: 'changed the status',
-      REASSIGNED: 'reassigned it', DEADLINE: 'changed the deadline', EDITED: 'edited it', CANCELLED: 'cancelled it' }[a] || a;
+      REASSIGNED: 'reassigned it', DEADLINE: 'changed the deadline', EDITED: 'edited it', CANCELLED: 'cancelled it',
+      APPROVED_STEP: 'approved a step', PUBLISHED: 'marked it published', ARCHIVED: 'archived it', PEOPLE: 'changed reviewer or helpers' }[a] || a;
   }
   function done(msg) { return function (x) { replaceTask(x); renderView(); toast(msg); }; }
   function simpleForm(t, title, submit, name, label, input, action, msg, min) {
